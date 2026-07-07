@@ -127,22 +127,27 @@ router.post('/', uploadLimiter, async (req, res) => {
 		return res.status(400).json({ error: 'No libraries found in file' });
 	}
 
+	// Column names below must match the uploads/scans collections exactly.
+	// parsedLibraries (json) is stored as an array — the /scan route reads it
+	// back to run matching. `created` is an autodate, so we don't set it.
+	// NOTE: userId is required by both collections but the API authenticates as
+	// a superuser service account and has no per-request user identity, so it is
+	// attached client-side today. See the audit note on moving ownership
+	// server-side (forward the user's PB token) to make this flow robust.
 	const uploadRecord = await pb.collection('uploads').create({
 		fileName,
 		fileFormat,
-		mimeType,
 		fileSize: fileBuffer.length,
-		librariesCount: libraries.length,
-		parsedLibraries: JSON.stringify(libraries),
-		uploadedAt: new Date().toISOString(),
+		libraryCount: libraries.length,
+		parsedLibraries: libraries,
 	});
 
 	const scanRecord = await pb.collection('scans').create({
 		uploadId: uploadRecord.id,
-		status: 'pending',
+		scanStatus: 'pending',
 		totalVulnerabilitiesFound: 0,
-		vulnerableLibraries: JSON.stringify([]),
-		createdAt: new Date().toISOString(),
+		vulnerableLibraries: [],
+		scanStartTime: new Date().toISOString(),
 	});
 
 	logger.info(`Upload created: ${uploadRecord.id}, Scan created: ${scanRecord.id}`);
