@@ -16,21 +16,9 @@ const exportLimiter = rateLimit({
 	validate: { trustProxy: false },
 });
 
-// CORS middleware for export endpoint - explicitly allow all origins
-router.use((req, res, next) => {
-	const origin = req.headers.origin || '*';
-	res.setHeader('Access-Control-Allow-Origin', origin);
-	res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, PUT, DELETE');
-	res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-	res.setHeader('Access-Control-Allow-Credentials', 'true');
-
-	// Handle preflight requests
-	if (req.method === 'OPTIONS') {
-		return res.sendStatus(200);
-	}
-
-	next();
-});
+// CORS is handled globally in main.js via the shared allowlist. This route
+// previously reflected the caller's Origin back with credentials enabled,
+// which let any site make credentialed cross-origin requests to it.
 
 router.post('/', exportLimiter, async (req, res) => {
 	const { scanId, format } = req.body;
