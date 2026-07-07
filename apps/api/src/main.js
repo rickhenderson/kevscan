@@ -36,9 +36,19 @@ process.on('SIGTERM', async () => {
 });
 
 app.use(helmet());
+
+// CORS_ORIGIN is a comma-separated allowlist of exact origins, e.g.
+// "https://kevscan.cloud,https://www.kevscan.cloud". Credentials are only
+// enabled when a concrete allowlist is set — a wildcard origin ("*") combined
+// with credentials is rejected by browsers and is unsafe, so we never emit it.
+const corsAllowlist = (process.env.CORS_ORIGIN || '')
+	.split(',')
+	.map((origin) => origin.trim())
+	.filter((origin) => origin && origin !== '*');
+
 app.use(cors({
-	origin: process.env.CORS_ORIGIN,
-	credentials: true,
+	origin: corsAllowlist.length > 0 ? corsAllowlist : false,
+	credentials: corsAllowlist.length > 0,
 }));
 app.use(morgan('combined'));
 app.use(globalRateLimit);

@@ -173,9 +173,11 @@ const ScanResultsPage = () => {
                     <CardContent>
                       <div className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold
                         ${scan.scanStatus === 'completed' ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400' :
-                        scan.scanStatus === 'failed' ? 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400' : 
+                        scan.scanStatus === 'failed' ? 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400' :
                         'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400'}`}>
-                        {scan.scanStatus.charAt(0).toUpperCase() + scan.scanStatus.slice(1)}
+                        {scan.scanStatus
+                          ? scan.scanStatus.charAt(0).toUpperCase() + scan.scanStatus.slice(1)
+                          : 'Pending'}
                       </div>
                       <p className="text-xs text-muted-foreground mt-2">
                         {format(new Date(scan.created), 'MMM d, yyyy HH:mm')}

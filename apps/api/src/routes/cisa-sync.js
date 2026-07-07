@@ -2,6 +2,7 @@ import express from 'express';
 import rateLimit from 'express-rate-limit';
 import pb from '../utils/pocketbaseClient.js';
 import logger from '../utils/logger.js';
+import { mapKevEntry } from '../utils/kev.js';
 
 const router = express.Router();
 
@@ -17,7 +18,7 @@ const syncLimiter = rateLimit({
 const CISA_KEV_URL = 'https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json';
 
 router.get('/', syncLimiter, async (req, res) => {
-	const startTime = Date.now();
+	const syncStartTime = new Date().toISOString();
 
 	const response = await fetch(CISA_KEV_URL);
 
@@ -28,7 +29,8 @@ router.get('/', syncLimiter, async (req, res) => {
 		await pb.collection('sync_logs').create({
 			status: 'failure',
 			errorMessage,
-			syncedAt: new Date().toISOString(),
+			syncStartTime,
+			syncEndTime: new Date().toISOString(),
 		});
 
 		throw new Error(errorMessage);
@@ -43,7 +45,8 @@ router.get('/', syncLimiter, async (req, res) => {
 		await pb.collection('sync_logs').create({
 			status: 'failure',
 			errorMessage,
-			syncedAt: new Date().toISOString(),
+			syncStartTime,
+			syncEndTime: new Date().toISOString(),
 		});
 
 		throw new Error(errorMessage);
@@ -52,18 +55,15 @@ router.get('/', syncLimiter, async (req, res) => {
 	let upsertedCount = 0;
 
 	for (const vuln of data.vulnerabilities) {
-		const recordData = {
-			cveId: vuln.cveID,
-			productName: vuln.productName,
-			affectedVersions: vuln.affectedVersions ? vuln.affectedVersions.join(',') : '',
-			cvssScore: vuln.cvssScore || 0,
-			dateAdded: vuln.dateAdded,
-			remediationAvailable: vuln.remediationAvailable === 'Yes',
-			configurationNotes: vuln.configurationNotes || '',
-		};
+		const recordData = mapKevEntry(vuln);
 
+		// Skip malformed entries rather than writing partial rows.
+		if (!recordData) continue;
+
+		// Upsert keyed on vulnerabilityId (the unique-indexed column). The filter
+		// is parameterized so a CVE id can't be interpreted as filter syntax.
 		const existingRecords = await pb.collection('cisa_kev_vulnerabilities').getFullList({
-			filter: `cveId = "${vuln.cveID}"`,
+			filter: pb.filter('vulnerabilityId = {:cveId}', { cveId: recordData.vulnerabilityId }),
 		});
 
 		if (existingRecords.length > 0) {
@@ -75,22 +75,21 @@ router.get('/', syncLimiter, async (req, res) => {
 		upsertedCount++;
 	}
 
-	const syncDuration = Date.now() - startTime;
+	const syncEndTime = new Date().toISOString();
 
 	await pb.collection('sync_logs').create({
 		status: 'success',
 		vulnerabilitiesFetched: upsertedCount,
-		syncDurationMs: syncDuration,
-		syncedAt: new Date().toISOString(),
+		syncStartTime,
+		syncEndTime,
 	});
 
-	logger.info(`CISA KEV sync completed: ${upsertedCount} vulnerabilities upserted in ${syncDuration}ms`);
+	logger.info(`CISA KEV sync completed: ${upsertedCount} vulnerabilities upserted`);
 
 	res.json({
 		status: 'success',
 		vulnerabilitiesFetched: upsertedCount,
-		timestamp: new Date().toISOString(),
-		syncDurationMs: syncDuration,
+		timestamp: syncEndTime,
 	});
 });
 

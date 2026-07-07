@@ -2,6 +2,8 @@ import express from 'express';
 import rateLimit from 'express-rate-limit';
 import pb from '../utils/pocketbaseClient.js';
 import logger from '../utils/logger.js';
+import { matchLibraries } from '../utils/kev.js';
+import { requireAuth } from '../middleware/auth.js';
 
 const router = express.Router();
 
@@ -14,23 +16,7 @@ const scanLimiter = rateLimit({
 	validate: { trustProxy: false },
 });
 
-function versionInRange(version, rangeStr) {
-	if (!rangeStr) return false;
-
-	const ranges = rangeStr.split(',').map(r => r.trim());
-
-	for (const range of ranges) {
-		if (range === version) return true;
-		if (range.includes('*')) {
-			const pattern = range.replace(/\*/g, '.*');
-			if (new RegExp(`^${pattern}$`).test(version)) return true;
-		}
-	}
-
-	return false;
-}
-
-router.post('/', scanLimiter, async (req, res) => {
+router.post('/', scanLimiter, requireAuth, async (req, res) => {
 	const { scanId, uploadId } = req.body;
 
 	if (!scanId || !uploadId) {
@@ -43,48 +29,43 @@ router.post('/', scanLimiter, async (req, res) => {
 		return res.status(400).json({ error: 'Upload not found' });
 	}
 
-	const libraries = JSON.parse(uploadRecord.parsedLibraries || '[]');
+	const scanRecord = await pb.collection('scans').getOne(scanId);
 
-	const vulnerableLibraries = [];
-	let totalVulnerabilitiesFound = 0;
-
-	for (const lib of libraries) {
-		const vulnerabilities = await pb.collection('cisa_kev_vulnerabilities').getFullList({
-			filter: `productName = "${lib.name}"`,
-		});
-
-		for (const vuln of vulnerabilities) {
-			if (versionInRange(lib.version, vuln.affectedVersions)) {
-				vulnerableLibraries.push({
-					library: lib.name,
-					version: lib.version,
-					cveId: vuln.cveId,
-					cvssScore: vuln.cvssScore,
-					affectedVersions: vuln.affectedVersions,
-					remediationAvailable: vuln.remediationAvailable,
-					configurationNotes: vuln.configurationNotes,
-					dateAdded: vuln.dateAdded,
-				});
-				totalVulnerabilitiesFound++;
-			}
-		}
+	// The API acts as a superuser, so PocketBase's own ownership rules don't
+	// apply here — enforce them explicitly against the verified caller.
+	if (uploadRecord.userId !== req.userId || scanRecord.userId !== req.userId) {
+		return res.status(403).json({ error: 'You do not have access to this scan' });
 	}
 
+	// parsedLibraries is a json column: PocketBase returns it already parsed, but
+	// tolerate a stringified value too in case an older row stored one.
+	const rawLibraries = uploadRecord.parsedLibraries;
+	const libraries = Array.isArray(rawLibraries)
+		? rawLibraries
+		: JSON.parse(rawLibraries || '[]');
+
+	// Load the KEV catalog once and match in memory. The catalog is ~1.6k rows,
+	// so this is cheaper and simpler than a per-library query, and keeps the
+	// matching logic in one testable place (utils/kev.js).
+	const kevRecords = await pb.collection('cisa_kev_vulnerabilities').getFullList();
+	const vulnerableLibraries = matchLibraries(libraries, kevRecords);
+
 	await pb.collection('scans').update(scanId, {
-		status: 'completed',
-		totalVulnerabilitiesFound,
-		vulnerableLibraries: JSON.stringify(vulnerableLibraries),
-		completedAt: new Date().toISOString(),
+		scanStatus: 'completed',
+		totalLibrariesScanned: libraries.length,
+		totalVulnerabilitiesFound: vulnerableLibraries.length,
+		vulnerableLibraries,
+		scanEndTime: new Date().toISOString(),
 	});
 
-	logger.info(`Scan completed: ${scanId}, Vulnerabilities found: ${totalVulnerabilitiesFound}`);
+	logger.info(`Scan completed: ${scanId}, vulnerabilities found: ${vulnerableLibraries.length}`);
 
 	res.json({
 		scanId,
 		status: 'completed',
 		summary: {
 			totalLibraries: libraries.length,
-			totalVulnerabilitiesFound,
+			totalVulnerabilitiesFound: vulnerableLibraries.length,
 			vulnerableLibrariesCount: vulnerableLibraries.length,
 		},
 		vulnerableLibraries,

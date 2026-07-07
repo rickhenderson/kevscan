@@ -4,6 +4,7 @@ import PDFDocument from 'pdfkit';
 import { stringify } from 'csv';
 import pb from '../utils/pocketbaseClient.js';
 import logger from '../utils/logger.js';
+import { requireAuth } from '../middleware/auth.js';
 
 const router = express.Router();
 
@@ -16,23 +17,11 @@ const exportLimiter = rateLimit({
 	validate: { trustProxy: false },
 });
 
-// CORS middleware for export endpoint - explicitly allow all origins
-router.use((req, res, next) => {
-	const origin = req.headers.origin || '*';
-	res.setHeader('Access-Control-Allow-Origin', origin);
-	res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, PUT, DELETE');
-	res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-	res.setHeader('Access-Control-Allow-Credentials', 'true');
+// CORS is handled globally in main.js via the shared allowlist. This route
+// previously reflected the caller's Origin back with credentials enabled,
+// which let any site make credentialed cross-origin requests to it.
 
-	// Handle preflight requests
-	if (req.method === 'OPTIONS') {
-		return res.sendStatus(200);
-	}
-
-	next();
-});
-
-router.post('/', exportLimiter, async (req, res) => {
+router.post('/', exportLimiter, requireAuth, async (req, res) => {
 	const { scanId, format } = req.body;
 
 	logger.info(`Export request received: scanId=${scanId}, format=${format}`);
@@ -56,16 +45,30 @@ router.post('/', exportLimiter, async (req, res) => {
 		return res.status(400).json({ error: 'Scan not found' });
 	}
 
-	logger.info(`Scan record found: ${scanId}, status=${scanRecord.status}`);
-
-	let vulnerableLibraries = [];
-	try {
-		vulnerableLibraries = JSON.parse(scanRecord.vulnerableLibraries || '[]');
-		logger.info(`Parsed ${vulnerableLibraries.length} vulnerable libraries from scan`);
-	} catch (parseError) {
-		logger.error(`Failed to parse vulnerableLibraries JSON: ${parseError.message}`);
-		throw new Error(`Invalid scan data format: ${parseError.message}`);
+	// The API acts as a superuser, so enforce scan ownership explicitly against
+	// the verified caller before handing back its contents.
+	if (scanRecord.userId !== req.userId) {
+		logger.warn(`Export denied: ${req.userId} does not own scan ${scanId}`);
+		return res.status(403).json({ error: 'You do not have access to this scan' });
 	}
+
+	logger.info(`Scan record found: ${scanId}, status=${scanRecord.scanStatus}`);
+
+	// vulnerableLibraries is a json column: PocketBase returns it already parsed,
+	// but tolerate a stringified value in case an older row stored one.
+	let vulnerableLibraries = [];
+	const rawVulnerable = scanRecord.vulnerableLibraries;
+	if (Array.isArray(rawVulnerable)) {
+		vulnerableLibraries = rawVulnerable;
+	} else if (rawVulnerable) {
+		try {
+			vulnerableLibraries = JSON.parse(rawVulnerable);
+		} catch (parseError) {
+			logger.error(`Failed to parse vulnerableLibraries JSON: ${parseError.message}`);
+			throw new Error(`Invalid scan data format: ${parseError.message}`);
+		}
+	}
+	logger.info(`Parsed ${vulnerableLibraries.length} vulnerable libraries from scan`);
 
 	if (format === 'pdf') {
 		logger.info(`Generating PDF export for scan: ${scanId}`);
