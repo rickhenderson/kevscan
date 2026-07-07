@@ -2,6 +2,7 @@ import express from 'express';
 import rateLimit from 'express-rate-limit';
 import pb from '../utils/pocketbaseClient.js';
 import logger from '../utils/logger.js';
+import { requireAuth } from '../middleware/auth.js';
 
 const router = express.Router();
 
@@ -93,7 +94,7 @@ function parseLibraries(content, format) {
 	return libraries;
 }
 
-router.post('/', uploadLimiter, async (req, res) => {
+router.post('/', uploadLimiter, requireAuth, async (req, res) => {
 	const { file, fileName } = req.body;
 
 	if (!file || !fileName) {
@@ -130,11 +131,10 @@ router.post('/', uploadLimiter, async (req, res) => {
 	// Column names below must match the uploads/scans collections exactly.
 	// parsedLibraries (json) is stored as an array — the /scan route reads it
 	// back to run matching. `created` is an autodate, so we don't set it.
-	// NOTE: userId is required by both collections but the API authenticates as
-	// a superuser service account and has no per-request user identity, so it is
-	// attached client-side today. See the audit note on moving ownership
-	// server-side (forward the user's PB token) to make this flow robust.
+	// userId comes from the verified session (requireAuth), so the row is owned
+	// correctly at creation time — no fragile client-side patch afterward.
 	const uploadRecord = await pb.collection('uploads').create({
+		userId: req.userId,
 		fileName,
 		fileFormat,
 		fileSize: fileBuffer.length,
@@ -143,6 +143,7 @@ router.post('/', uploadLimiter, async (req, res) => {
 	});
 
 	const scanRecord = await pb.collection('scans').create({
+		userId: req.userId,
 		uploadId: uploadRecord.id,
 		scanStatus: 'pending',
 		totalVulnerabilitiesFound: 0,

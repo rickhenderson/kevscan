@@ -3,6 +3,7 @@ import rateLimit from 'express-rate-limit';
 import pb from '../utils/pocketbaseClient.js';
 import logger from '../utils/logger.js';
 import { matchLibraries } from '../utils/kev.js';
+import { requireAuth } from '../middleware/auth.js';
 
 const router = express.Router();
 
@@ -15,7 +16,7 @@ const scanLimiter = rateLimit({
 	validate: { trustProxy: false },
 });
 
-router.post('/', scanLimiter, async (req, res) => {
+router.post('/', scanLimiter, requireAuth, async (req, res) => {
 	const { scanId, uploadId } = req.body;
 
 	if (!scanId || !uploadId) {
@@ -26,6 +27,14 @@ router.post('/', scanLimiter, async (req, res) => {
 
 	if (!uploadRecord) {
 		return res.status(400).json({ error: 'Upload not found' });
+	}
+
+	const scanRecord = await pb.collection('scans').getOne(scanId);
+
+	// The API acts as a superuser, so PocketBase's own ownership rules don't
+	// apply here — enforce them explicitly against the verified caller.
+	if (uploadRecord.userId !== req.userId || scanRecord.userId !== req.userId) {
+		return res.status(403).json({ error: 'You do not have access to this scan' });
 	}
 
 	// parsedLibraries is a json column: PocketBase returns it already parsed, but

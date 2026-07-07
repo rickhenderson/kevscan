@@ -1,11 +1,9 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Helmet } from 'react-helmet';
-import { useAuth } from '@/contexts/AuthContext.jsx';
 import Header from '@/components/Header.jsx';
 import Footer from '@/components/Footer.jsx';
 import apiServerClient from '@/lib/apiServerClient';
-import pb from '@/lib/pocketbaseClient';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
@@ -15,7 +13,6 @@ import { Upload, FileText, CheckCircle, AlertCircle } from 'lucide-react';
 
 const UploadPage = () => {
   const navigate = useNavigate();
-  const { currentUser } = useAuth();
   const [file, setFile] = useState(null);
   const [format, setFormat] = useState('');
   const [uploading, setUploading] = useState(false);
@@ -103,15 +100,10 @@ const UploadPage = () => {
       }
       
       const uploadData = await uploadResponse.json();
-      
-      await pb.collection('uploads').update(uploadData.uploadId, {
-        userId: currentUser.id
-      }, { $autoCancel: false });
-      
-      await pb.collection('scans').update(uploadData.scanId, {
-        userId: currentUser.id
-      }, { $autoCancel: false });
-      
+
+      // Ownership (userId) is now set server-side by the API from the verified
+      // session, so there's no client-side patch to apply here anymore.
+
       toast.success(`File uploaded successfully. ${uploadData.librariesCount} libraries detected.`);
       
       const scanResponse = await apiServerClient.fetch('/scan', {
